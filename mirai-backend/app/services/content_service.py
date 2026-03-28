@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import os
+import re
 from dataclasses import dataclass
 from typing import List
 
@@ -16,13 +18,21 @@ class ContentResult:
 
 class ContentService:
     def __init__(self) -> None:
-        self.api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
-        self.model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
         self._model = None
+        self._is_configured = False
 
-        if self.api_key:
-            genai.configure(api_key=self.api_key)
-            self._model = genai.GenerativeModel(self.model_name)
+    def _ensure_configured(self) -> None:
+        if self._is_configured:
+            return
+
+        api_key = os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY")
+        model_name = os.getenv("GEMINI_MODEL", "gemini-1.5-flash")
+
+        if api_key:
+            genai.configure(api_key=api_key)
+            self._model = genai.GenerativeModel(model_name)
+
+        self._is_configured = True
 
     def _tone_from_emotions(self, emotions: List[str]) -> str:
         emotion_set = set(emotions)
@@ -53,6 +63,8 @@ class ContentService:
         return ContentResult(caption=caption, hashtags=" ".join(hashtags), tone=tone)
 
     def generate(self, topic: str, emotions: List[str], context: List[str]) -> ContentResult:
+        self._ensure_configured()
+        
         if self._model is None:
             return self._template_fallback(topic, emotions, context)
 
@@ -68,17 +80,22 @@ class ContentService:
             text = (response.text or "").strip()
             # Best-effort parse: if JSON format is not guaranteed, fallback.
             if '"caption"' in text and '"hashtags"' in text and '"tone"' in text:
-                # Lightweight extraction to avoid adding extra dependencies.
-                import json
-                import re
-
                 match = re.search(r"\{[\s\S]*\}", text)
                 if match:
                     payload = json.loads(match.group(0))
+                    
+                    caption = payload.get("caption") or ""
+                    hashtags = payload.get("hashtags") or ""
+                    tone = payload.get("tone") or ""
+
+                    caption = str(caption).strip()
+                    hashtags = str(hashtags).strip()
+                    tone = str(tone).strip()
+
                     return ContentResult(
-                        caption=str(payload.get("caption", "")).strip() or self._template_fallback(topic, emotions, context).caption,
-                        hashtags=str(payload.get("hashtags", "")).strip() or "#ContentCreator #SocialMediaGrowth",
-                        tone=str(payload.get("tone", "")).strip() or self._tone_from_emotions(emotions),
+                        caption=caption or self._template_fallback(topic, emotions, context).caption,
+                        hashtags=hashtags or "#ContentCreator #SocialMediaGrowth",
+                        tone=tone or self._tone_from_emotions(emotions),
                     )
         except Exception:
             pass
